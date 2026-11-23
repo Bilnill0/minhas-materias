@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10131d">
+  <title>Minhas Matérias</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root{color-scheme:dark;--bg:#0d1018;--panel:#171c29;--line:#2b3448;--text:#f4f6fb;--muted:#aab4c8;--accent:#9b7cff}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#20203a 0,#0d1018 48%);color:var(--text);font:16px system-ui,Arial,sans-serif;min-height:100vh}
+    main{width:min(760px,100%);margin:auto;padding:28px 16px 50px}.hero{text-align:center;margin:12px 0 24px}
+    h1{font-size:clamp(28px,7vw,42px);margin:0 0 8px}.sub{color:var(--muted);margin:0}
+    .panel{background:#171c29ee;border:1px solid var(--line);border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 12px 35px #0003}
+    .auth{display:grid;gap:10px}.row{display:flex;gap:10px;flex-wrap:wrap}input{min-width:0;flex:1;background:#0d1220;color:white;border:1px solid var(--line);border-radius:11px;padding:13px;font:inherit}
+    button{border:0;border-radius:11px;padding:12px 15px;font:600 14px system-ui;cursor:pointer;background:var(--accent);color:#100d1b}
+    button.secondary{background:#2a3347;color:#eef2ff}button.danger{background:#542b39;color:#ffe8ee}button:disabled{opacity:.55;cursor:not-allowed}
+    .status{font-size:13px;color:var(--muted);min-height:20px;margin-top:7px}.progress-head{display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .bar{height:12px;background:#090d16;border-radius:99px;overflow:hidden;margin-top:12px}.fill{height:100%;width:0;background:linear-gradient(90deg,#8b72ff,#56d6b0);transition:width .2s}
+    .subject{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.subject:last-child{border:0}
+    .subject-name{font-weight:650}.state{font-size:13px;color:var(--muted);display:block;margin-top:3px}
+    .state-btn{min-width:142px}.small{font-size:13px;color:var(--muted);line-height:1.5}
+    .hidden{display:none!important}.actions{display:flex;gap:8px;flex-wrap:wrap}.foot{text-align:center;color:var(--muted);font-size:12px;margin-top:22px}
+    @media(max-width:480px){.subject{align-items:flex-start;flex-direction:column}.state-btn{width:100%}.panel{padding:15px}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <h1>📚 Minhas Matérias</h1>
+    <p class="sub">Organize seus estudos e acompanhe seu progresso.</p>
+  </header>
+
+  <section class="panel">
+    <h2 style="margin-top:0">☁️ Sua conta</h2>
+    <div id="authForm" class="auth">
+      <input id="email" type="email" autocomplete="email" placeholder="Seu e-mail">
+      <input id="password" type="password" autocomplete="current-password" placeholder="Senha (mínimo 6 caracteres)">
+      <div class="row">
+        <button id="loginBtn">Entrar</button>
+        <button id="signupBtn" class="secondary">Criar conta</button>
+      </div>
+    </div>
+    <div id="accountBox" class="hidden">
+      <div>Conectado como <strong id="accountEmail"></strong></div>
+      <div class="row" style="margin-top:10px"><button id="logoutBtn" class="secondary">Sair da conta</button></div>
+    </div>
+    <div id="connectionStatus" class="status">Configure o Supabase para ativar o salvamento na nuvem.</div>
+  </section>
+
+  <section class="panel">
+    <div class="progress-head"><h2 style="margin:0">📈 Progresso geral</h2><strong id="progressText">0%</strong></div>
+    <div class="bar"><div id="progressFill" class="fill"></div></div>
+    <p class="small" id="progressCount">0 de 8 matérias concluídas</p>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0">📝 Minhas matérias</h2>
+    <p class="small">Toque no botão de cada matéria para alternar entre Não comecei, Fazendo e Concluído.</p>
+    <div id="subjects"></div>
+    <div class="actions" style="margin-top:16px">
+      <button id="backupBtn" class="secondary">⬇️ Baixar backup</button>
+      <button id="restoreBtn" class="secondary">⬆️ Restaurar backup</button>
+      <input id="backupFile" type="file" accept="application/json,.json" class="hidden">
+      <button id="resetBtn" class="danger">Zerar progresso</button>
+    </div>
+    <p class="small">O backup JSON pode ser guardado no celular ou em outro lugar seguro. Restaurar um backup substitui o progresso atual.</p>
+  </section>
+  <p class="foot">Minhas Matérias • Seus dados são vinculados à sua conta.</p>
+</main>
+
+<script>
+(() => {
+  // 1) Depois de criar seu projeto Supabase, preencha os dois campos abaixo.
+  const SUPABASE_URL = "COLE_AQUI_SUA_PROJECT_URL";
+  const SUPABASE_ANON_KEY = "COLE_AQUI_SUA_CHAVE_PUBLICA_ANON";
+
+  const subjects = ["História","Geografia","Inglês","Física","Biologia","Química","Português","Matemática"];
+  const labels = ["❌ Não comecei","➗ Fazendo","✅ Concluído"];
+  const key = "minhas-materias-local-v1";
+  let progress = {};
+  let supabase = null;
+  let currentUser = null;
+  let saveTimer = null;
+  let saveQueue = Promise.resolve();
+  let dirty = false;
+
+  const $ = id => document.getElementById(id);
+  const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_URL.includes("COLE_AQUI") && !SUPABASE_ANON_KEY.includes("COLE_AQUI");
+
+  function loadLocal(){
+    try { progress = JSON.parse(localStorage.getItem(key) || "{}"); }
+    catch { progress = {}; }
+    subjects.forEach(s => { if (![0,1,2].includes(progress[s])) progress[s] = 0; });
+  }
+  function storeLocal(){ localStorage.setItem(key, JSON.stringify(progress)); }
+  function render(){
+    $("subjects").innerHTML = "";
+    subjects.forEach(name => {
+      const value = progress[name] || 0;
+      const item = document.createElement("div"); item.className = "subject";
+      const info = document.createElement("div");
+      const title = document.createElement("div"); title.className = "subject-name"; title.textContent = name;
+      const state = document.createElement("span"); state.className = "state"; state.textContent = labels[value];
+      info.append(title,state);
+      const btn = document.createElement("button"); btn.className = "state-btn " + (value===2 ? "" : "secondary");
+      btn.textContent = value===0 ? "Marcar andamento" : value===1 ? "Concluir matéria" : "Recomeçar";
+      btn.setAttribute("aria-label", name + ": " + labels[value]);
+      btn.addEventListener("click", () => { progress[name] = (value+1)%3; changed(); });
+      item.append(info,btn); $("subjects").append(item);
+    });
+    const done = subjects.filter(s => progress[s]===2).length;
+    const pct = Math.round(done/subjects.length*100);
+    $("progressText").textContent = pct+"%";
+    $("progressFill").style.width = pct+"%";
+    $("progressCount").textContent = `${done} de ${subjects.length} matérias concluídas`;
+  }
+  function setStatus(message){ $("connectionStatus").textContent = message; }
+  function changed(){
+    storeLocal(); render(); dirty = true;
+    if (currentUser && supabase) scheduleCloudSave();
+    else if (!configured) setStatus("Salvo neste aparelho. Configure o Supabase para sincronizar entre dispositivos.");
+    else setStatus("Salvo neste aparelho. Entre na sua conta para sincronizar.");
+  }
+  function scheduleCloudSave(){
+    clearTimeout(saveTimer);
+    setStatus("Alteração salva neste aparelho. Sincronizando...");
+    saveTimer = setTimeout(() => {
+      const snapshot = JSON.parse(JSON.stringify(progress));
+      saveQueue = saveQueue.then(() => cloudSave(snapshot)).catch(err => {
+        console.error(err); setStatus("Não foi possível sincronizar. Seus dados continuam salvos neste aparelho.");
+      });
+    }, 450);
+  }
+  async function cloudSave(snapshot){
+    if (!currentUser || !supabase) return;
+    const {error} = await supabase.from("progresso").upsert({
+      user_id: currentUser.id, dados: snapshot, updated_at: new Date().toISOString()
+    }, {onConflict:"user_id"});
+    if (error) throw error;
+    dirty = false; setStatus("☁️ Sincronizado com a nuvem.");
+  }
+  async function loadCloud(){
+    const {data,error} = await supabase.from("progresso").select("dados").eq("user_id",currentUser.id).maybeSingle();
+    if (error) throw error;
+    if (data && data.dados && typeof data.dados==="object") {
+      progress = data.dados;
+      subjects.forEach(s => { if (![0,1,2].includes(progress[s])) progress[s]=0; });
+      storeLocal(); render(); setStatus("☁️ Progresso carregado da nuvem.");
+    } else {
+      await cloudSave(progress); setStatus("☁️ Conta conectada. Seu progresso foi salvo na nuvem.");
+    }
+  }
+  async function refreshAuth(session){
+    currentUser = session?.user || null;
+    $("authForm").classList.toggle("hidden",!!currentUser);
+    $("accountBox").classList.toggle("hidden",!currentUser);
+    $("accountEmail").textContent = currentUser?.email || "";
+    if (currentUser) {
+      try { await loadCloud(); }
+      catch(e){ console.error(e); setStatus("Erro ao carregar da nuvem. Confira a tabela e as políticas RLS."); }
+    } else if (configured) setStatus("Entre ou crie uma conta para sincronizar.");
+  }
+
+  $("backupBtn").addEventListener("click", () => {
+    const data = {app:"Minhas Matérias",version:1,exportedAt:new Date().toISOString(),progress};
+    const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download="backup-minhas-materias.json"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  });
+  $("restoreBtn").addEventListener("click", () => $("backupFile").click());
+  $("backupFile").addEventListener("change", async e => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const incoming = data.progress || data;
+      if (!incoming || typeof incoming!=="object") throw new Error("Formato inválido");
+      const next = {};
+      subjects.forEach(s => next[s] = [0,1,2].includes(incoming[s]) ? incoming[s] : 0);
+      if (!confirm("Restaurar este backup e substituir o progresso atual?")) return;
+      progress = next; changed(); alert("Backup restaurado!");
+    } catch { alert("Não foi possível ler esse backup. Selecione um JSON válido exportado pelo site."); }
+    finally { e.target.value=""; }
+  });
+  $("resetBtn").addEventListener("click", () => {
+    if (!confirm("Tem certeza que deseja zerar todas as matérias?")) return;
+    subjects.forEach(s => progress[s]=0); changed();
+  });
+
+  $("loginBtn").addEventListener("click", async () => {
+    if (!supabase) return setStatus("Configure o Supabase antes de entrar.");
+    const email=$("email").value.trim(), password=$("password").value;
+    if (!email || !password) return setStatus("Preencha e-mail e senha.");
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error) return setStatus("Erro ao entrar: "+error.message);
+    await refreshAuth(data.session);
+  });
+  $("signupBtn").addEventListener("click", async () => {
+    if (!supabase) return setStatus("Configure o Supabase antes de criar uma conta.");
+    const email=$("email").value.trim(), password=$("password").value;
+    if (!email || password.length<6) return setStatus("Informe um e-mail e uma senha com pelo menos 6 caracteres.");
+    const {data,error}=await supabase.auth.signUp({email,password});
+    if(error) return setStatus("Erro ao criar conta: "+error.message);
+    if(data.session) await refreshAuth(data.session);
+    else setStatus("Conta criada! Confira seu e-mail para confirmar o cadastro e depois entre.");
+  });
+  $("logoutBtn").addEventListener("click", async () => {
+    if (dirty && currentUser) { try { await cloudSave(progress); } catch(e){} }
+    const {error}=await supabase.auth.signOut();
+    if(error) setStatus("Erro ao sair: "+error.message);
+    else { currentUser=null; $("accountBox").classList.add("hidden"); $("authForm").classList.remove("hidden"); setStatus("Você saiu. O progresso local continua neste aparelho."); }
+  });
+
+  loadLocal(); render();
+  if (configured && window.supabase) {
+    supabase = window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+    supabase.auth.getSession().then(({data})=>refreshAuth(data.session));
+    supabase.auth.onAuthStateChange((_event,session)=>{ setTimeout(()=>refreshAuth(session),0); });
+  } else {
+    setStatus("Salvo neste aparelho. Configure a URL e a chave pública do Supabase para ativar contas e sincronização.");
+  }
+})();
+</script>
+</body>
+</html>
